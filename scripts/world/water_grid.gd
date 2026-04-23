@@ -14,12 +14,38 @@ var _meshes:       Dictionary = {}  # Vector2i(x,z) -> MeshInstance3D
 var _sources:      Array[Vector2i] = []
 var _terrain:      Terrain = null
 var _tick:         int = 0
-var _water_mat:    StandardMaterial3D
+var _water_mat:    ShaderMaterial
+
+const _WATER_SHADER := """
+shader_type spatial;
+render_mode blend_mix, cull_back, diffuse_burley, specular_schlick_ggx;
+
+uniform vec4 deep_color    : source_color = vec4(0.06, 0.28, 0.75, 0.82);
+uniform vec4 shallow_color : source_color = vec4(0.26, 0.65, 0.90, 0.52);
+uniform float wave_speed   : hint_range(0.0, 3.0) = 0.7;
+uniform float wave_scale   : hint_range(0.5, 8.0) = 3.0;
+
+void fragment() {
+	float fresnel = pow(clamp(1.0 - dot(NORMAL, VIEW), 0.0, 1.0), 2.5);
+	ALBEDO = mix(shallow_color.rgb, deep_color.rgb, fresnel);
+	ALPHA  = mix(shallow_color.a,   deep_color.a,   fresnel);
+
+	float rx = sin(UV.x * wave_scale * 6.28318 + TIME * wave_speed);
+	float rz = sin(UV.y * wave_scale * 6.28318 + TIME * wave_speed * 0.73 + 1.57);
+	float r  = (rx + rz) * 0.5;
+	NORMAL_MAP = normalize(vec3(r * 0.12, r * 0.12, 1.0));
+
+	ROUGHNESS = 0.04;
+	METALLIC  = 0.0;
+	SPECULAR  = 0.95;
+}
+"""
 
 func _ready() -> void:
-	_water_mat = StandardMaterial3D.new()
-	_water_mat.albedo_color = Color(0.15, 0.45, 0.9, 0.65)
-	_water_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var shader := Shader.new()
+	shader.code = _WATER_SHADER
+	_water_mat = ShaderMaterial.new()
+	_water_mat.shader = shader
 
 	for x in range(GRID_W):
 		for z in range(GRID_H):
@@ -96,6 +122,8 @@ func _make_water_mesh(x: int, z: int) -> MeshInstance3D:
 	mesh.size = Vector3(0.92, 1.0, 0.92)
 	mi.mesh              = mesh
 	mi.material_override = _water_mat
+	mi.cast_shadow       = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.transparency      = 0.0
 	mi.position          = Vector3(x, 0.0, z)
 	mi.visible           = false
 	add_child(mi)
