@@ -1,0 +1,3 @@
+[gd_scene format=3 uid="uid://b3dam001"]
+
+[node name="Dam" type="Node3D"]

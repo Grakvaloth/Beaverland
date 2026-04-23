@@ -1,0 +1,3 @@
+[gd_scene format=3 uid="uid://b3floodgate001"]
+
+[node name="Floodgate" type="Node3D"]

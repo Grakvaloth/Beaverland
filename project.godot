@@ -1,0 +1,25 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="TimberbornClone"
+run/main_scene="res://scenes/ui/main_menu.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+GameState="*res://autoloads/game_state.gd"
+SceneManager="*res://autoloads/scene_manager.gd"
+SaveManager="*res://autoloads/save_manager.gd"
+SeasonManager="*res://autoloads/season_manager.gd"
+BuildingManager="*res://autoloads/building_manager.gd"
+NetworkManager="*res://autoloads/network_manager.gd"
