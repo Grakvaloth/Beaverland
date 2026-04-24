@@ -1,25 +1,31 @@
 extends Node
 
-enum Type { LUMBERJACK, STORAGE, HOUSE, WATERWHEEL }
+enum Type { LUMBERJACK, STORAGE, HOUSE, WATERWHEEL, WATER_PUMP, WATER_STORAGE }
 
 const TYPE_NAMES: Dictionary = {
-	Type.LUMBERJACK: "Holzfäller",
-	Type.STORAGE:    "Lager",
-	Type.HOUSE:      "Haus",
-	Type.WATERWHEEL: "Wasserrad",
+	Type.LUMBERJACK:    "Holzfäller",
+	Type.STORAGE:       "Lager",
+	Type.HOUSE:         "Haus",
+	Type.WATERWHEEL:    "Wasserrad",
+	Type.WATER_PUMP:    "Pumpe",
+	Type.WATER_STORAGE: "Wasserspeicher",
 }
 const TYPE_COLORS: Dictionary = {
-	Type.LUMBERJACK: Color(0.55, 0.35, 0.15),
-	Type.STORAGE:    Color(0.60, 0.60, 0.60),
-	Type.HOUSE:      Color(0.90, 0.80, 0.20),
-	Type.WATERWHEEL: Color(0.20, 0.50, 0.90),
+	Type.LUMBERJACK:    Color(0.55, 0.35, 0.15),
+	Type.STORAGE:       Color(0.60, 0.60, 0.60),
+	Type.HOUSE:         Color(0.90, 0.80, 0.20),
+	Type.WATERWHEEL:    Color(0.20, 0.50, 0.90),
+	Type.WATER_PUMP:    Color(0.10, 0.40, 0.75),
+	Type.WATER_STORAGE: Color(0.25, 0.70, 0.90),
 }
 
 const TYPE_DESC: Dictionary = {
-	Type.LUMBERJACK: "Holzt Bäume in der Umgebung ab.",
-	Type.STORAGE:    "Lagert Ressourcen sicher.",
-	Type.HOUSE:      "Bietet Bibern eine Unterkunft.",
-	Type.WATERWHEEL: "Erzeugt Energie aus fließendem Wasser.",
+	Type.LUMBERJACK:    "Holzt Bäume in der Umgebung ab.",
+	Type.STORAGE:       "Lagert Ressourcen sicher.",
+	Type.HOUSE:         "Bietet Bibern eine Unterkunft.",
+	Type.WATERWHEEL:    "Erzeugt Energie aus fließendem Wasser.",
+	Type.WATER_PUMP:    "Entnimmt Wasser aus dem Grid und füllt einen Wasserspeicher.",
+	Type.WATER_STORAGE: "Lagert Wasser als Rohstoff für Biber.",
 }
 
 var _data:     Dictionary = {}              # Vector2i → Type
@@ -153,3 +159,39 @@ func _spawn_mesh(x: int, z: int, type: Type) -> void:
 
 	get_tree().current_scene.add_child(root_node)
 	_meshes[Vector2i(x, z)] = root_node
+
+	_spawn_component(root_node, x, z, type)
+
+func _spawn_component(root_node: Node3D, x: int, z: int, type: Type) -> void:
+	var comp_scene: PackedScene = null
+	if type == Type.WATER_PUMP:
+		comp_scene = preload("res://scenes/buildings/water_pump.tscn")
+	elif type == Type.WATER_STORAGE:
+		comp_scene = preload("res://scenes/buildings/water_storage.tscn")
+	if comp_scene == null:
+		return
+
+	var comp: Node3D = comp_scene.instantiate()
+	root_node.add_child(comp)
+
+	if comp is WaterPump:
+		var pump := comp as WaterPump
+		pump.grid_x = x
+		pump.grid_z = z
+		var nearest_storage := _find_nearest_storage(x, z)
+		if nearest_storage != null:
+			pump.target_storage = pump.get_path_to(nearest_storage)
+
+func _find_nearest_storage(x: int, z: int) -> WaterStorage:
+	var best: WaterStorage = null
+	var best_d: float = INF
+	for node in get_tree().get_nodes_in_group("water_storage"):
+		var s := node as WaterStorage
+		if s == null:
+			continue
+		var gp := s.global_position
+		var d := Vector2(gp.x - float(x), gp.z - float(z)).length()
+		if d < best_d:
+			best_d = d
+			best = s
+	return best

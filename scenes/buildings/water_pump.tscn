@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvwaterpump001"]
+
+[ext_resource type="Script" path="res://scripts/buildings/water_pump.gd" id="1_pump"]
+
+[node name="WaterPump" type="Node3D"]
+script = ExtResource("1_pump")
