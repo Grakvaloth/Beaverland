@@ -15,8 +15,18 @@ const TYPE_COLORS: Dictionary = {
 	Type.WATERWHEEL: Color(0.20, 0.50, 0.90),
 }
 
-var _data:   Dictionary = {}   # Vector2i → Type
-var _meshes: Dictionary = {}   # Vector2i → Node3D
+const TYPE_DESC: Dictionary = {
+	Type.LUMBERJACK: "Holzt Bäume in der Umgebung ab.",
+	Type.STORAGE:    "Lagert Ressourcen sicher.",
+	Type.HOUSE:      "Bietet Bibern eine Unterkunft.",
+	Type.WATERWHEEL: "Erzeugt Energie aus fließendem Wasser.",
+}
+
+var _data:     Dictionary = {}              # Vector2i → Type
+var _meshes:   Dictionary = {}              # Vector2i → Node3D
+var _selected: Vector2i   = Vector2i(-1,-1)
+
+signal selection_changed(key: Vector2i)
 
 func place_building(x: int, z: int, type: Type) -> bool:
 	var key := Vector2i(x, z)
@@ -39,6 +49,60 @@ func remove_building(x: int, z: int) -> void:
 
 func has_building(x: int, z: int) -> bool:
 	return _data.has(Vector2i(x, z))
+
+func select(x: int, z: int) -> void:
+	var key := Vector2i(x, z)
+	if _selected == key:
+		return
+	_clear_highlight(_selected)
+	_selected = key
+	_set_highlight(key, Color(1.0, 0.9, 0.2))
+	selection_changed.emit(key)
+
+func deselect() -> void:
+	_clear_highlight(_selected)
+	_selected = Vector2i(-1, -1)
+	selection_changed.emit(_selected)
+
+func get_selected() -> Vector2i:
+	return _selected
+
+func get_info(x: int, z: int) -> Dictionary:
+	var key := Vector2i(x, z)
+	if not _data.has(key):
+		return {}
+	var t: Type = _data[key]
+	return {
+		"name":     TYPE_NAMES[t],
+		"type":     int(t),
+		"desc":     TYPE_DESC[t],
+		"position": "%d / %d" % [x, z],
+	}
+
+func _set_highlight(key: Vector2i, color: Color) -> void:
+	if not _meshes.has(key):
+		return
+	var root: Node3D = _meshes[key]
+	if not is_instance_valid(root):
+		return
+	var mi := root.get_node_or_null("MeshInstance3D") as MeshInstance3D
+	if mi:
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = color
+		mi.material_override = mat
+
+func _clear_highlight(key: Vector2i) -> void:
+	if not _data.has(key) or not _meshes.has(key):
+		return
+	var root: Node3D = _meshes[key]
+	if not is_instance_valid(root):
+		return
+	var mi := root.get_node_or_null("MeshInstance3D") as MeshInstance3D
+	if mi:
+		var t: Type = _data[key]
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = TYPE_COLORS[t]
+		mi.material_override = mat
 
 func clear_all() -> void:
 	for key in _meshes:

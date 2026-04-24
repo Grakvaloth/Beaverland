@@ -12,31 +12,33 @@ var _spawn_points: Array[Dictionary] = []
 var _source_cells: Dictionary = {}
 
 var _terrain: Terrain = null
-var _camera: Camera3D = null
+var _camera:  Camera3D = null
 var _markers: Dictionary = {}   # Vector2i -> MeshInstance3D
 
-# Orbit-Kamera
-var _cam_yaw: float   = 45.0    # horizontale Rotation in Grad
-var _cam_pitch: float = 35.0    # Neigungswinkel (15..80)
-var _cam_size: float  = 22.0    # Orthographic-Größe = Zoom
-var _cam_target: Vector3        # Mittelpunkt der Ansicht
-
-var _is_rotating: bool = false
-var _is_panning:  bool = false
-var _mouse_last:  Vector2 = Vector2.ZERO
+# Kamera – identisch zu main.gd
+var _cam_pivot:    Vector3 = Vector3(9.5, 0.0, 9.5)
+var _cam_yaw:      float   = deg_to_rad(45.0)
+var _cam_pitch:    float   = deg_to_rad(52.0)
+var _cam_arm:      float   = 22.8
+var _cam_size:     float   = 22.0
+var _cam_speed:    float   = 10.0
+var _cam_rot_spd:  float   = 1.8
+var _rmb_held:     bool    = false
+var _mmb_held:     bool    = false
 
 var _map_name_field: LineEdit = null
 var _brush_btns: Array[Button] = []
 var _tool_btns: Dictionary = {}
 
-var _map_overlay: Control = null
-var _map_list_vb: VBoxContainer = null
+var _map_overlay:   Control = null
+var _map_list_vb:   VBoxContainer = null
+var _editor_menu:   Control = null
 
 func _ready() -> void:
-	_cam_target = Vector3(9.5, 0.0, 9.5)
 	_setup_camera()
 	_load_terrain()
 	_build_ui()
+	_build_editor_menu()
 
 # ── Kamera ──────────────────────────────────────────────────
 
@@ -49,18 +51,38 @@ func _setup_camera() -> void:
 	_update_camera()
 
 func _update_camera() -> void:
-	var yaw_rad   := deg_to_rad(_cam_yaw)
-	var pitch_rad := deg_to_rad(_cam_pitch)
-	var dist      := 50.0
+	var horiz := cos(_cam_pitch) * _cam_arm
+	var vert   := sin(_cam_pitch) * _cam_arm
+	_camera.global_position = _cam_pivot + Vector3(
+		sin(_cam_yaw) * horiz,
+		vert,
+		cos(_cam_yaw) * horiz
+	)
+	_camera.look_at(_cam_pivot, Vector3.UP)
+	_camera.size = _cam_size
 
-	var offset := Vector3(
-		sin(yaw_rad) * cos(pitch_rad),
-		sin(pitch_rad),
-		cos(yaw_rad) * cos(pitch_rad)
-	) * dist
+func _change_pitch(delta: float) -> void:
+	_cam_pitch = clampf(_cam_pitch + delta, deg_to_rad(15.0), deg_to_rad(85.0))
+	_update_camera()
 
-	_camera.global_position = _cam_target + offset
-	_camera.look_at(_cam_target, Vector3.UP)
+func _process(delta: float) -> void:
+	var forward := Vector3(-sin(_cam_yaw), 0.0, -cos(_cam_yaw))
+	var right   := Vector3( cos(_cam_yaw), 0.0, -sin(_cam_yaw))
+	var moved := false
+	if Input.is_action_pressed("cam_forward"):
+		_cam_pivot += forward * _cam_speed * delta; moved = true
+	if Input.is_action_pressed("cam_backward"):
+		_cam_pivot -= forward * _cam_speed * delta; moved = true
+	if Input.is_action_pressed("cam_left"):
+		_cam_pivot -= right * _cam_speed * delta;   moved = true
+	if Input.is_action_pressed("cam_right"):
+		_cam_pivot += right * _cam_speed * delta;   moved = true
+	if Input.is_action_pressed("cam_rotate_left"):
+		_cam_yaw -= _cam_rot_spd * delta; moved = true
+	if Input.is_action_pressed("cam_rotate_right"):
+		_cam_yaw += _cam_rot_spd * delta; moved = true
+	if moved:
+		_update_camera()
 
 # ── Terrain laden ───────────────────────────────────────────
 
@@ -194,9 +216,8 @@ func _build_left_toolbar(parent: Control) -> void:
 	_add_tool_btn(vbox, Tool.SPAWN,  "● Start")
 	_add_tool_btn(vbox, Tool.ERASE,  "✕ Löschen")
 
-	# Kamera-Hilfe
 	var help := Label.new()
-	help.text = "\nKamera:\nRMB: Drehen\nMMB: Pan\nScroll: Zoom"
+	help.text = "\nKamera:\nWASD / Q,E\nRMB: Schwenken\nMMB: Drehen\nScroll: Zoom\nShift+Scroll: Neigung"
 	help.add_theme_font_size_override("font_size", 11)
 	vbox.add_child(help)
 
@@ -297,46 +318,57 @@ func _on_back() -> void:
 # ── Input ───────────────────────────────────────────────────
 
 func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		if _map_overlay and _map_overlay.visible:
+			_map_overlay.visible = false
+		elif _editor_menu and _editor_menu.visible:
+			_editor_menu.visible = false
+		else:
+			if _editor_menu:
+				_editor_menu.visible = true
+		return
+
+	if _editor_menu and _editor_menu.visible:
+		return
+
 	if event is InputEventMouseButton:
-		_handle_button(event as InputEventMouseButton)
+		var mb := event as InputEventMouseButton
+		if mb.pressed:
+			var shift := Input.is_key_pressed(KEY_SHIFT)
+			match mb.button_index:
+				MOUSE_BUTTON_LEFT:
+					if not _is_over_ui(mb.position):
+						_apply_tool_at(mb.position)
+				MOUSE_BUTTON_WHEEL_UP:
+					if shift:
+						_change_pitch(deg_to_rad(3.0))
+					else:
+						_cam_size = clampf(_cam_size - 1.5, 4.0, 50.0)
+						_update_camera()
+				MOUSE_BUTTON_WHEEL_DOWN:
+					if shift:
+						_change_pitch(deg_to_rad(-3.0))
+					else:
+						_cam_size = clampf(_cam_size + 1.5, 4.0, 50.0)
+						_update_camera()
+		match mb.button_index:
+			MOUSE_BUTTON_RIGHT:
+				_rmb_held = mb.pressed
+			MOUSE_BUTTON_MIDDLE:
+				_mmb_held = mb.pressed
+
 	elif event is InputEventMouseMotion:
-		_handle_motion(event as InputEventMouseMotion)
-
-func _handle_button(ev: InputEventMouseButton) -> void:
-	match ev.button_index:
-		MOUSE_BUTTON_LEFT:
-			if ev.pressed and not _is_over_ui(ev.position):
-				_apply_tool_at(ev.position)
-		MOUSE_BUTTON_RIGHT:
-			_is_rotating = ev.pressed
-			_mouse_last  = ev.position
-		MOUSE_BUTTON_MIDDLE:
-			_is_panning  = ev.pressed
-			_mouse_last  = ev.position
-		MOUSE_BUTTON_WHEEL_UP:
-			if ev.pressed:
-				_cam_size = maxf(5.0, _cam_size - 2.0)
-				_camera.size = _cam_size
-		MOUSE_BUTTON_WHEEL_DOWN:
-			if ev.pressed:
-				_cam_size = minf(50.0, _cam_size + 2.0)
-				_camera.size = _cam_size
-
-func _handle_motion(ev: InputEventMouseMotion) -> void:
-	if _is_rotating:
-		_cam_yaw   -= ev.relative.x * 0.4
-		_cam_pitch  = clampf(_cam_pitch - ev.relative.y * 0.3, 15.0, 80.0)
-		_update_camera()
-	elif _is_panning:
-		var right   := _camera.global_transform.basis.x
-		var forward := -_camera.global_transform.basis.z
-		forward.y = 0.0
-		if forward.length_squared() > 0.0001:
-			forward = forward.normalized()
-		var speed := _cam_size * 0.015
-		_cam_target -= right * ev.relative.x * speed
-		_cam_target -= forward * ev.relative.y * speed
-		_update_camera()
+		var motion := event as InputEventMouseMotion
+		if _rmb_held:
+			var pan_scale := _cam_size * 0.0015
+			var right   := Vector3( cos(_cam_yaw), 0.0, -sin(_cam_yaw))
+			var forward := Vector3(-sin(_cam_yaw), 0.0, -cos(_cam_yaw))
+			_cam_pivot -= right   * motion.relative.x * pan_scale
+			_cam_pivot += forward * motion.relative.y * pan_scale
+			_update_camera()
+		elif _mmb_held:
+			_cam_yaw += motion.relative.x * 0.005
+			_change_pitch(-motion.relative.y * 0.004)
 
 func _is_over_ui(pos: Vector2) -> bool:
 	# Toolbar-Bereiche (Top-Bar und linke Leiste) manuell prüfen
@@ -435,6 +467,53 @@ func _remove_marker(x: int, z: int) -> void:
 	if _markers.has(key):
 		(_markers[key] as MeshInstance3D).queue_free()
 		_markers.erase(key)
+
+# ── Editor-Menü (ESC) ───────────────────────────────────────
+
+func _build_editor_menu() -> void:
+	var canvas := CanvasLayer.new()
+	canvas.layer = 20
+	add_child(canvas)
+
+	_editor_menu = Control.new()
+	_editor_menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_editor_menu.visible = false
+	_editor_menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	canvas.add_child(_editor_menu)
+
+	var bg := ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.65)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_editor_menu.add_child(bg)
+
+	var panel := PanelContainer.new()
+	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	panel.offset_left   = -150.0
+	panel.offset_right  =  150.0
+	panel.offset_top    = -130.0
+	panel.offset_bottom =  130.0
+	_editor_menu.add_child(panel)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	panel.add_child(vb)
+
+	var title := Label.new()
+	title.text = "Editor-Menü"
+	title.add_theme_font_size_override("font_size", 24)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+
+	for entry: Array in [
+		["Weitermachen",  func() -> void: _editor_menu.visible = false],
+		["Map speichern", func() -> void: _on_save(); _editor_menu.visible = false],
+		["Hauptmenü",     func() -> void: SceneManager.goto("res://scenes/ui/main_menu.tscn")],
+	]:
+		var btn := Button.new()
+		btn.text = entry[0]
+		btn.custom_minimum_size = Vector2(260, 46)
+		btn.pressed.connect(entry[1])
+		vb.add_child(btn)
 
 # ── Map-Daten ───────────────────────────────────────────────
 

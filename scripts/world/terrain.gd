@@ -4,7 +4,7 @@ extends Node3D
 const GRID_SIZE_X := 20
 const GRID_SIZE_Z := 20
 const MAX_HEIGHT   := 20
-const CELL_GAP     := 0.05
+const CELL_GAP     := 0.0
 
 var _cells:       Dictionary = {}
 var _terrain_mat: ShaderMaterial = null

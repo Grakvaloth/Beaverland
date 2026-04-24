@@ -1,47 +1,56 @@
 class_name WaterGrid
 extends Node3D
 
-const GRID_W        := 20
-const GRID_H        := 20
-const EVAP_RATE     := 0.0003
-const TICKS_PER_SIM := 4      # Simulation alle 4 Physics-Frames
+const GRID_W         := 20
+const GRID_H         := 20
+const EVAP_RATE      := 0.0001
+const TICKS_PER_SIM  := 4
+const FLOW_FRACTION  := 0.22
+const FLOW_THRESHOLD := 0.008
+const EDGE_DRAIN     := 0.06   # sanfterer Abfluss am Kartenrand
+const VIS_THRESHOLD  := 0.003  # Mindestpegel zum Anzeigen
 
-var source_rate:  float = 0.06
-var _drought:     bool  = false
+var source_rate: float = 0.05
+var _drought:    bool  = false
+var _show:       bool  = true
 
-var _water:        Dictionary = {}  # Vector2i(x,z) -> float
-var _meshes:       Dictionary = {}  # Vector2i(x,z) -> MeshInstance3D
-var _sources:      Array[Vector2i] = []
-var _terrain:      Terrain = null
-var _tick:         int = 0
-var _water_mat:    ShaderMaterial
+var _water:   Dictionary = {}  # Vector2i(x,z) -> float
+var _meshes:  Dictionary = {}  # Vector2i(x,z) -> MeshInstance3D
+var _sources: Array[Vector2i] = []
+var _terrain: Terrain = null
+var _tick:    int = 0
+var _water_mat: ShaderMaterial
 
 const _WATER_SHADER := """
 shader_type spatial;
-render_mode blend_mix, cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode blend_mix, cull_disabled, diffuse_burley, specular_schlick_ggx;
 
-uniform vec4 deep_color    : source_color = vec4(0.06, 0.28, 0.75, 0.82);
-uniform vec4 shallow_color : source_color = vec4(0.26, 0.65, 0.90, 0.52);
-uniform float wave_speed   : hint_range(0.0, 3.0) = 0.7;
-uniform float wave_scale   : hint_range(0.5, 8.0) = 3.0;
+uniform vec4  deep_color    : source_color = vec4(0.04, 0.20, 0.62, 0.90);
+uniform vec4  shallow_color : source_color = vec4(0.16, 0.55, 0.88, 0.55);
+uniform float wave_speed    : hint_range(0.0, 4.0) = 0.9;
+uniform float wave_scale    : hint_range(0.5, 8.0) = 2.8;
+uniform float ripple_str    : hint_range(0.0, 0.5) = 0.18;
 
 void fragment() {
-	float fresnel = pow(clamp(1.0 - dot(NORMAL, VIEW), 0.0, 1.0), 2.5);
-	ALBEDO = mix(shallow_color.rgb, deep_color.rgb, fresnel);
-	ALPHA  = mix(shallow_color.a,   deep_color.a,   fresnel);
+	float t  = TIME * wave_speed;
+	float rx = sin(UV.x * wave_scale * 6.283 + t) * ripple_str;
+	float rz = sin(UV.y * wave_scale * 6.283 + t * 0.71 + 1.57) * ripple_str;
+	float rx2 = sin(UV.x * wave_scale * 3.14 - t * 0.53 + 0.8) * ripple_str * 0.5;
+	float rz2 = sin(UV.y * wave_scale * 3.14 + t * 0.63 + 2.4) * ripple_str * 0.5;
+	NORMAL_MAP = normalize(vec3(rx + rx2, rz + rz2, 1.0));
 
-	float rx = sin(UV.x * wave_scale * 6.28318 + TIME * wave_speed);
-	float rz = sin(UV.y * wave_scale * 6.28318 + TIME * wave_speed * 0.73 + 1.57);
-	float r  = (rx + rz) * 0.5;
-	NORMAL_MAP = normalize(vec3(r * 0.12, r * 0.12, 1.0));
+	float fresnel = pow(clamp(1.0 - dot(NORMAL, VIEW), 0.0, 1.0), 2.2);
+	ALBEDO  = mix(shallow_color.rgb, deep_color.rgb, fresnel);
+	ALPHA   = mix(shallow_color.a,   deep_color.a,   fresnel);
 
 	ROUGHNESS = 0.04;
 	METALLIC  = 0.0;
-	SPECULAR  = 0.95;
+	SPECULAR  = 0.96;
 }
 """
 
 func _ready() -> void:
+	add_to_group("water_grid")
 	var shader := Shader.new()
 	shader.code = _WATER_SHADER
 	_water_mat = ShaderMaterial.new()
@@ -63,34 +72,36 @@ func _physics_process(_delta: float) -> void:
 		_simulate()
 	_update_visuals()
 
-# ── Simulation ──────────────────────────────────────────────
+# ── Simulation ───────────────────────────────────────────────
 
 func _simulate() -> void:
-	var next := _water.duplicate()
+	var next: Dictionary = {}
+	for key in _water:
+		next[key] = _water[key]
 
-	# Quellen füllen (während Dürre kein Nachschub)
 	if not _drought:
 		for src in _sources:
-			next[src] = minf(1.0, next.get(src, 0.0) + source_rate)
+			next[src] = next.get(src, 0.0) + source_rate
 
-	# Fluss: von höherem Gesamtniveau zu niedrigerem
 	for key in _water:
 		var lvl: float = _water.get(key, 0.0)
-		if lvl < 0.002:
+		if lvl < 0.001:
 			continue
-		var my_total := _surface(key) + lvl
+		var my_total: float = _surface(key) + lvl
 		for dir: Vector2i in [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]:
 			var nk: Vector2i = key + dir
 			if nk.x < 0 or nk.y < 0 or nk.x >= GRID_W or nk.y >= GRID_H:
+				# Nur den Wasseranteil abfließen lassen, nicht vom Terrainniveau abhängig
+				var drain: float = minf(lvl * EDGE_DRAIN, maxf(0.0, next.get(key, 0.0)))
+				next[key] = maxf(0.0, next.get(key, 0.0) - drain)
 				continue
-			var n_total: float = _surface(nk) + float(_water.get(nk, 0.0))
-			if my_total > n_total + 0.05:
-				var flow: float = minf((my_total - n_total) * 0.25, float(next.get(key, 0.0)))
-				next[key]  = maxf(0.0, float(next.get(key, 0.0)) - flow)
-				next[nk]   = minf(1.0, float(next.get(nk,  0.0)) + flow)
+			var n_total: float = _surface(nk) + _water.get(nk, 0.0)
+			if my_total > n_total + FLOW_THRESHOLD:
+				var flow: float = minf((my_total - n_total) * FLOW_FRACTION, maxf(0.0, next.get(key, 0.0)))
+				next[key] = maxf(0.0, next.get(key, 0.0) - flow)
+				next[nk]  = next.get(nk, 0.0) + flow
 
-	# Verdunstung (während Dürre 5× schneller)
-	var evap := EVAP_RATE * (5.0 if _drought else 1.0)
+	var evap: float = EVAP_RATE * (5.0 if _drought else 1.0)
 	for key in next:
 		if not (key in _sources):
 			next[key] = maxf(0.0, next.get(key, 0.0) - evap)
@@ -102,34 +113,41 @@ func _surface(key: Vector2i) -> float:
 		return float(_terrain.get_height_at(key.x, key.y))
 	return 1.0
 
-# ── Visualisierung ──────────────────────────────────────────
+# ── Visualisierung ───────────────────────────────────────────
 
 func _update_visuals() -> void:
 	for key in _meshes:
 		var lvl: float = _water.get(key, 0.0)
 		var mi: MeshInstance3D = _meshes[key]
-		if lvl > 0.02:
-			var surf := _surface(key)
-			mi.position = Vector3(key.x, surf + lvl * 0.5 - 0.5, key.y)
-			mi.scale.y  = lvl
-			mi.visible  = true
+		if _show and lvl > VIS_THRESHOLD:
+			# Plane liegt auf der Wasseroberfläche: Terrain-Top + Wasserstand
+			var surf_top: float = _surface(key) - 0.5
+			mi.position.y = surf_top + lvl
+			mi.visible = true
 		else:
 			mi.visible = false
 
 func _make_water_mesh(x: int, z: int) -> MeshInstance3D:
 	var mi   := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.92, 1.0, 0.92)
+	var mesh := PlaneMesh.new()
+	mesh.size            = Vector2(1.0, 1.0)
+	mesh.subdivide_width  = 0
+	mesh.subdivide_depth  = 0
 	mi.mesh              = mesh
 	mi.material_override = _water_mat
 	mi.cast_shadow       = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mi.transparency      = 0.0
 	mi.position          = Vector3(x, 0.0, z)
 	mi.visible           = false
 	add_child(mi)
 	return mi
 
-# ── Quellen ─────────────────────────────────────────────────
+func toggle_visible() -> void:
+	_show = not _show
+	if not _show:
+		for key in _meshes:
+			(_meshes[key] as MeshInstance3D).visible = false
+
+# ── Quellen ──────────────────────────────────────────────────
 
 func _load_sources_from_map() -> void:
 	var map_name := SaveManager.get_current_map_name()
@@ -151,7 +169,7 @@ func set_source(x: int, z: int, enabled: bool) -> void:
 	else:
 		_sources.erase(key)
 
-# ── Speichern/Laden-Helfer ──────────────────────────────────
+# ── Speichern/Laden-Helfer ───────────────────────────────────
 
 func get_all_cells_with_water() -> Array:
 	var result: Array = []
